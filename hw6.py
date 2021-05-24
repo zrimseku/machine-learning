@@ -11,6 +11,8 @@ def cross_entropy_cost(net, X, true_classes):
             t = np.zeros(y.shape[0])
             t[true_classes[i]] = 1
             ce += np.dot(1 - t, np.log(1 - y))
+    elif net.act_last != 'softmax':
+        print('Use softmax or sigmoid for last layer activation.')
     return -ce / len(true_classes)
 
 
@@ -21,11 +23,28 @@ def sigmoid(z):
 def forward(net, X):
     Z = [X]
     A = [X]
-    for i in range(net.nr_layers - 1):
+    for i in range(net.nr_layers - 2):
         z = net.weights[i] @ X + net.bias[i]
-        X = sigmoid(z)
+        if net.activation == 'sigmoid':
+            X = sigmoid(z)
+        elif net.activation == 'relu':
+            X = np.maximum(z, 0)
+        else:
+            print('Unknown activation function. Use sigmoid or relu.')
+            exit(-1)
         Z.append(z)
         A.append(X)
+
+    # Output layer
+    z = net.weights[-1] @ X + net.bias[-1]
+    Z.append(z)
+    if net.act_last == 'sigmoid':
+        A.append(sigmoid(z))
+    elif net.act_last == 'softmax':
+        softmax = np.exp(z)
+        softmax /= np.sum(softmax, axis=0)
+        A.append(softmax)
+
     return Z, A
 
 
@@ -40,7 +59,14 @@ def backpropagation(net, X, y):
     dW[-1] = dz @ A[-2].T / len(y)
 
     for i in range(2, net.nr_layers):
-        dz = A[-i] * (1 - A[-i]) * (net.weights[1-i].T @ dz)
+        if net.activation == 'sigmoid':
+            act_derivative = A[-i] * (1 - A[-i])
+        elif net.activation == 'relu':
+            act_derivative = Z[-i] > 0
+        else:
+            print('Unknown activation function. Use sigmoid or relu.')
+            exit(-1)
+        dz = act_derivative * (net.weights[1-i].T @ dz)
         dW[-i] = dz @ A[-i-1].T / len(y)
         db[-i] = np.reshape(np.sum(dz, axis=1), (dz.shape[0], 1)) / len(y)
     return dW, db
@@ -106,7 +132,7 @@ if __name__ == '__main__':
                   [1, 0],
                   [1, 1]])
     y = np.array([0, 1, 2, 3])
-    net = ANNClassification([4, 5, 10], 2, 4)
+    net = ANNClassification([4, 5, 10], 2, 4, activation_fn='relu', act_last='softmax')
     a, b = forward(net, np.array([[1, 2]]).T)
     out = b[-1]
     dw, db = backpropagation(net, np.array([[1, 2]]).T, [1])
