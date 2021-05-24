@@ -14,7 +14,6 @@ def sigmoid(z):
 
 
 def forward(net, x):
-    # TODO: za več inputov naenkrat
     Z = [x]
     A = [x]
     for i in range(net.nr_layers - 1):
