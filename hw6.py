@@ -1,52 +1,62 @@
 import numpy as np
 
 
-def cross_entropy_cost(net, x, true_class):
-    _, A = forward(net, x)
-    y = A[-1]
-    t = np.zeros(y.shape[0])
-    t[true_class] = 1
-    return -np.dot(t, np.log(y))[0] - np.dot(1-t, np.log(1-y))[0]
+def cross_entropy_cost(net, X, true_classes):
+    _, A = forward(net, X)
+    Y = A[-1]
+    ce = sum(np.log(Y[true_classes, range(len(true_classes))]))
+    if net.act_last == 'sigmoid':
+        for i in range(len(true_classes)):
+            y = A[-1][:, i]
+            t = np.zeros(y.shape[0])
+            t[true_classes[i]] = 1
+            ce += np.dot(1 - t, np.log(1 - y))
+    return -ce / len(true_classes)
 
 
 def sigmoid(z):
     return 1 / (1 + np.exp(-z))
 
 
-def forward(net, x):
-    Z = [x]
-    A = [x]
+def forward(net, X):
+    Z = [X]
+    A = [X]
     for i in range(net.nr_layers - 1):
-        z = net.weights[i] @ x + net.bias[i]
-        x = sigmoid(z)
+        z = net.weights[i] @ X + net.bias[i]
+        X = sigmoid(z)
         Z.append(z)
-        A.append(x)
+        A.append(X)
     return Z, A
 
 
-def backpropagation(net, x, y):
-    Z, A = forward(net, x)
+def backpropagation(net, X, y):
+    Z, A = forward(net, X)
     dW = [np.zeros(np.shape(w)) for w in net.weights]
     db = [np.zeros(np.shape(b)) for b in net.bias]
-    dC_a = A[-1]
-    dC_a[y] += -1
-    db[-1] = dC_a
-    dW[-1] = db[-1] @ A[-2].T
+
+    dz = A[-1]
+    dz[y, range(len(y))] += -1
+    db[-1] = np.reshape(np.sum(dz, axis=1), (net.layer_sizes[-1], 1)) / len(y)
+    dW[-1] = dz @ A[-2].T / len(y)
+
     for i in range(2, net.nr_layers):
-        db[-i] = A[-i] * (1 - A[-i]) * (net.weights[1-i].T @ db[1-i])
-        dW[-i] = db[-i] @ A[-i-1].T
+        dz = A[-i] * (1 - A[-i]) * (net.weights[1-i].T @ dz)
+        dW[-i] = dz @ A[-i-1].T / len(y)
+        db[-i] = np.reshape(np.sum(dz, axis=1), (dz.shape[0], 1)) / len(y)
     return dW, db
 
 
 class ANNClassification:
 
-    def __init__(self, units, n_input=1, n_classes=1, lambda_=0):
+    def __init__(self, units, n_input=1, n_classes=1, lambda_=0, activation_fn='sigmoid', act_last='sigmoid'):
         # number of input parameters and classes are set to 1, if we dont know the values at initialization
         self.nr_layers = len(units) + 2
         self.layer_sizes = [n_input, *units, n_classes]
         self.bias = [np.random.randn(y, 1) for y in self.layer_sizes[1:]]
         self.weights = [np.random.randn(y, x) / np.sqrt(x) for x, y in zip(self.layer_sizes[:-1], self.layer_sizes[1:])]
         self.reg = lambda_
+        self.activation = activation_fn
+        self.act_last = act_last
 
 
 class ANNRegression:
@@ -96,12 +106,12 @@ if __name__ == '__main__':
                   [1, 0],
                   [1, 1]])
     y = np.array([0, 1, 2, 3])
-    net = ANNClassification([4, 5, 10], 3, 2)
-    a, b = forward(net, np.array([[1, 2, 3]]).T)
+    net = ANNClassification([4, 5, 10], 2, 4)
+    a, b = forward(net, np.array([[1, 2]]).T)
     out = b[-1]
-    dw, db = backpropagation(net, np.array([[1, 2, 3]]).T, 1)
-    f = cross_entropy_cost(net, np.array([[1, 2, 3]]).T, 1)
-    f1 = cross_entropy_cost(net, np.array([[1, 2, 3]]).T, 0)
-    check_gradient(net, np.array([[1, 2, 3]]).T, 1)
+    dw, db = backpropagation(net, np.array([[1, 2]]).T, [1])
+    f = cross_entropy_cost(net, np.array([[1, 2]]).T, [1])
+    f1 = cross_entropy_cost(net, np.array([[1, 2]]).T, [0])
+    check_gradient(net, X.T, y)
     c = 0
 
