@@ -23,12 +23,20 @@ def mse_cost(net, X, y):
     return mse
 
 
+def regularization(net):
+    reg = 0
+    if net.reg_par != 0:
+        for w in net.weight:
+            reg += np.linalg.norm(w) ** 2
+    return reg / 2 * net.reg_par
+
+
 def cost(net, X, y):
     if net.act_last == 'linear':
         f = mse_cost(net, X, y)
     else:
         f = cross_entropy_cost(net, X, y)
-    return f
+    return f + regularization(net)
 
 
 def sigmoid(z):
@@ -79,7 +87,7 @@ def backpropagation(net, X, y):
     else:
         dz[y, range(len(y))] += -1
     db[-1] = np.reshape(np.sum(dz, axis=1), (net.layer_sizes[-1], 1)) / len(y)
-    dW[-1] = dz @ A[-2].T / len(y)
+    dW[-1] = dz @ A[-2].T / len(y) + net.reg_par * net.weight[-1]
 
     for i in range(2, net.nr_layers):
         if net.activation == 'sigmoid':
@@ -90,7 +98,7 @@ def backpropagation(net, X, y):
             print('Unknown activation function. Use sigmoid or relu.')
             exit(-1)
         dz = act_derivative * (net.weight[1 - i].T @ dz)
-        dW[-i] = dz @ A[-i-1].T / len(y)
+        dW[-i] = dz @ A[-i-1].T / len(y) + net.reg_par * net.weight[-i]
         db[-i] = np.reshape(np.sum(dz, axis=1), (dz.shape[0], 1)) / len(y)
     return dW, db
 
@@ -114,7 +122,7 @@ class ANNClassification:
         self.layer_sizes = [n_input, *units, n_classes]
         self.bias = None
         self.weight = None
-        self.reg = lambda_
+        self.reg_par = lambda_
         self.activation = activation_fn
         self.act_last = act_last
 
@@ -169,7 +177,7 @@ class ANNRegression:
         self.layer_sizes = [n_input, *units, 1]
         self.bias = None
         self.weight = None
-        self.reg = lambda_
+        self.reg_par = lambda_
         self.activation = activation_fn
         self.act_last = 'linear'
 
