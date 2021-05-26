@@ -1,8 +1,12 @@
 import numpy as np
+import pandas as pd
 from scipy.optimize import fmin_l_bfgs_b
+from sklearn.model_selection import train_test_split
 
 
 def cross_entropy_cost(net, X, y):
+    if X.shape[0] != net.weight[0].shape[1]:
+        X = X.T
     _, A = forward(net, X)
     Y = A[-1]
     ce = sum(np.log(Y[y, range(len(y))]))
@@ -18,6 +22,8 @@ def cross_entropy_cost(net, X, y):
 
 
 def mse_cost(net, X, y):
+    if X.shape[0] != net.weight[0].shape[1]:
+        X = X.T
     _, A = forward(net, X)
     mse = sum((A[-1][0, :] - y) ** 2) / len(y) / 2
     return mse
@@ -116,7 +122,7 @@ def update_network(net, weight_bias_vec):
 
 class ANNClassification:
 
-    def __init__(self, units, n_input=None, n_classes=None, lambda_=0, activation_fn='sigmoid', act_last='sigmoid'):
+    def __init__(self, units, n_input=None, n_classes=None, lambda_=0., activation_fn='sigmoid', act_last='sigmoid'):
         # number of input parameters and classes are set to 1, if we dont know the values at initialization
         self.nr_layers = len(units) + 2
         self.layer_sizes = [n_input, *units, n_classes]
@@ -134,7 +140,7 @@ class ANNClassification:
 
     def backprop_for_optimization(self, weight_bias_vec, X, y):
         # change weights and bias of current net to new ones
-        self.weight, self.bias = update_network(self, weight_bias_vec)
+        # self.weight, self.bias = update_network(self, weight_bias_vec)
         dW, db = backpropagation(self, X, y)
         return np.hstack([np.hstack([w.flatten(), b.flatten()]) for w, b in zip(dW, db)])
 
@@ -172,7 +178,7 @@ class ANNClassification:
 
 class ANNRegression:
 
-    def __init__(self, units, lambda_, n_input=None, activation_fn='sigmoid'):
+    def __init__(self, units, lambda_=0., n_input=None, activation_fn='sigmoid'):
         self.nr_layers = len(units) + 2
         self.layer_sizes = [n_input, *units, 1]
         self.bias = None
@@ -188,6 +194,7 @@ class ANNRegression:
         return mse_cost(self, X, y)
 
     def backprop_for_optimization(self, weight_bias_vec, X, y):
+        # self.weight, self.bias = update_network(self, weight_bias_vec)
         dW, db = backpropagation(self, X, y)
         return np.hstack([np.hstack([w.flatten(), b.flatten()]) for w, b in zip(dW, db)])
 
@@ -255,18 +262,33 @@ def check_gradient(net, x, y, h=1e-6, tol=1e-4):
 
 
 if __name__ == '__main__':
-    X = np.array([[0, 0],
-                  [0, 1],
-                  [1, 0],
-                  [1, 1]])
-    y = np.array([0, 1, 2, 3])
-    net = ANNRegression([1, 3], 2, 4, activation_fn='relu')
-    net.fit(X, y)
-    a, b = forward(net, np.array([[1, 2]]).T)
-    out = b[-1]
-    dw, db = backpropagation(net, np.array([[1, 2]]).T, [1])
-    # f = cross_entropy_cost(net, np.array([[1, 2]]).T, [1])
-    # f1 = cross_entropy_cost(net, np.array([[1, 2]]).T, [0])
-    check_gradient(net, X.T, y)
+    housing3 = pd.read_csv('housing3.csv')
+    housing2r = pd.read_csv('housing2r.csv')
+
+    # change classes into integers
+    housing3['Class'] = housing3['Class'].map({c: int(c[1]) for c in housing3['Class'].unique()})
+
+    # generate train/test, input/target sets
+    Xh3 = housing3.loc[:, housing3.columns != 'Class'].values
+    yh3 = housing3['Class'].values
+    X3_train, X3_test, y3_train, y3_test = train_test_split(Xh3, yh3, test_size=0.2, random_state=3)
+
+    Xh2 = housing2r.loc[:, housing2r.columns != 'y'].values
+    yh2 = housing2r['y'].values
+    X2_train, X2_test, y2_train, y2_test = train_test_split(Xh2, yh2, test_size=0.2, random_state=2)
+
+    # create and fit networks
+    net_reg = ANNRegression([10, 30, 10], lambda_=0.001, activation_fn='relu')
+    net_reg.fit(X2_train, y2_train)
+
+    net_class = ANNClassification([10, 30, 10], lambda_=0.01, activation_fn='relu', act_last='softmax')
+    net_class.fit(X3_train, y3_train)
+
+    # cost on test data
+    mse = mse_cost(net_reg, X2_test, y2_test)
+    print('MSE: ', mse)
+
+    ce = cross_entropy_cost(net_class, X3_test, y3_test)
+    print('Cross entropy: ', ce)
     c = 0
 
