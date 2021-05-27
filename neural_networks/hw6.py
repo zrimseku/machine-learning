@@ -385,4 +385,29 @@ if __name__ == '__main__':
 
     # BIG DATASET
     big = pd.read_csv('../data/train.csv')
-    
+    big = big.drop('id', axis=1)
+    big['target'] = big['target'].map({c: int(c[-1]) - 1 for c in big['target'].unique()})
+    X = big.loc[:, big.columns != 'target'].values
+    y = big['target'].values
+
+    new = pd.read_csv('../data/test.csv')
+    X_test = new.drop('id', axis=1).values
+
+    # scale data
+    scaler = StandardScaler()
+    X = scaler.fit_transform(X)
+    X_test = scaler.transform(X_test)
+
+    # parameter_grid = {'lambda_': [0, 0.01, 0.1, 0.5, 1], 'units': [[], [10], [10, 10], [20, 20], [10, 10, 10]]}
+    parameter_grid = {'lambda_': [0.1, 1], 'units': [[10, 10], [10]]}
+
+    gs = GridSearchCV(estimator=ANNClassification(activation_fn='relu', act_last='softmax', n_classes=9), param_grid=parameter_grid,
+                      scoring=neg_cost)
+
+    results_class = gs.fit(X, y)
+    print('Best parameters: ', results_class.best_params_)
+    print('Consequential parameters: ', results_class.cv_results_['params'])
+    print('Time needed to fit: ', results_class.cv_results_['mean_fit_time'])
+    print('Time needed to score: ', results_class.cv_results_['mean_score_time'])
+    print('Mean test score on all folds: ', results_class.cv_results_['mean_test_score'])
+    print('Std of test scores on all folds: ', results_class.cv_results_['std_test_score'])
