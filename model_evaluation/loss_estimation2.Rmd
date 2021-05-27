@@ -1,0 +1,485 @@
+---
+title: "Loss Estimation"
+author: Ursa Zrimsek
+date: 11/05/2021
+output: pdf_document
+---
+## Setup
+#### Generating toy dataset
+First, we prepare the generator for our toy binary classification data, which has 8 independent variables, 3 of which are unrelated to the target variable. Because we generate the data, we know all the properties of the
+data generating process, which will allow us to study the quality of our loss estimation.
+We’ll be using negative log-loss (smaller is better) throughout this notebook.
+```{r}
+toy_data <- function(n, seed = NULL) {
+set.seed(seed)
+x <- matrix(rnorm(8 * n), ncol = 8)
+z <- 0.4 * x[,1] - 0.5 * x[,2] + 1.75 * x[,3] - 0.2 * x[,4] + x[,5]
+y <- runif(n) > 1 / (1 + exp(-z))
+return (data.frame(x = x, y = y))
+}
+log_loss <- function(y, p) {
+-(y * log(p) + (1 - y) * log(1 - p))
+}
+```
+
+#### A proxy for true risk
+We’ll be using this huge dataset as a proxy for the DGP and determining the ground-truth true risk of our
+models. Of course, this is itself just an estimate, but the dataset is large enough so that a model’s risk on
+this dataset differs from its true risk at most on the 3rd decimal digit.
+The reason for this is that we have 100000 observations (log losses, calculated on the dataset), and we are calculating their mean. By CLT we know that its probability distribution will approximate normal distribution, with mean equal to the ground-truth and standard deviation equal to standard deviation of observations divided by sqrt(100000). Our standard error is equal to sd(losses)/sqrt(100000) = 0.003 * sd(losses). That means that if we check that the standard deviation of observations on our big dataset is smaller than one, the error will be small enough. That's why we will check standard error in observations every time we are calculating true risk. If they are smaller than 1.5, our estimation is OK (smaller error than 0.005), otherwise we will print a warning and also know how much our estimation of the true risk can differ from the true value.
+```{r}
+df_dgp <- toy_data(100000, 0)
+options(digits=4)
+```
+
+
+## Holdout estimation
+
+Holdout estimation or, as it is commonly referred to, train-test splitting, is the most common approach to estimating a model’s risk. The first and most important thing to understand is that the model’s risk on the test data is just an estimate of the model’s true risk. As such, it should always contain some sort of quantification of uncertainty, such standard errors or 95% confidence intervals. We’ve learned a couple of techniques for doing this, but in this homework we’ll use the most simple one -- standard errors and 95% CI based on the asymptotic argument that the mean loss will be normally distributed with variance n times lower than the variance of the loss. When interpreting the results, we will also inspect the coverage of these confidence intervals to see how this simple approach does in practice.
+In the remainder of this section we will investigate some of the sources of variability and bias that contribute to the difference between the test data risk estimate and the true risk of a model trained on the training data.
+
+#### Model loss estimator variability due to test data variability
+
+We will generate a toy dataset with 50 observations and train a Bernoulli logit GLM on it. True risk proxy will be computed on the huge dataset with 100000 observations. Then we will generate new toy datasets with 50 observations 1000 times and analyze how the test data risk varies.
+
+```{r, echo = FALSE}
+toy_50 <- toy_data(50, 0)
+h <- glm(y~., data = toy_50, family= "binomial")
+
+predicted <- predict(h, newdata = df_dgp[,-9], type="response")
+y_true <- df_dgp$y
+
+true_risk_proxy <- mean(log_loss(y_true, predicted))
+cat('True risk proxy:', true_risk_proxy)
+
+if (sd(log_loss(y_true, predicted)) > 1.5) {
+  cat('Standard deviation of observations:', sd(log_loss(y_true, predicted)))
+}
+```
+
+
+```{r, echo = FALSE}
+st_error <- c()
+contains_true <- c()
+differences <- c()
+
+for (i in 1:1000) {
+  toy <- toy_data(50, i^2)
+
+  y_pred <- predict(h, newdata = toy[,-9], type="response")
+  y_true_toy <- toy$y
+
+  loss <- log_loss(y_true_toy, y_pred)
+
+  risk_est <- mean(loss)
+  std <- sd(loss) / sqrt(50)
+  st_error <- c(st_error, std)
+
+  ct <- abs(true_risk_proxy - risk_est) < 2 * std
+  contains_true <- c(contains_true, ct)
+
+  differences <- c(differences, risk_est - true_risk_proxy)
+}
+
+cat('Percentage of CI containing true risk proxy:', mean(contains_true)*100)
+cat('Mean difference:', mean(differences))
+
+y_0505 <- rep(0.5, 100000)
+cat('0.5-0.5 baseline true risk:', mean(log_loss(y_true, y_0505)))
+
+cat('Median standard error:', median(st_error))
+```
+
+```{r, fig.width=4, fig.height=4, echo = FALSE}
+plot(density(differences), main='', xlab='est_risk - true_risk') + abline(v=0, lty=3)
+```
+Above we can see plotted density of the difference between estimated and true risk of the model.
+If we look at the plot, we can see that it has longer tail on the right hand side, which means that our mistakes can be bigger when we underestimate our model's performance. That happens because there is a lower bound to how good our model can do, so there can't be such extreme cases where our estimated risk is lower than true risk than when it is higher (our train dataset can be chosen very poorly). The reason for this could also be the nature of the log loss function, as it punishes mistakes more than it rewards correct answers.
+We can also see that the mode of the difference is below 0, so most of the time we will overestimate the model's performance - but when we underestimate it, we underestimate it more (can see this from mean).
+The mean difference is 0 on the third decimal point, so this confirms that our estimate is unbiased (as we are choosing independent test sets with different seeds in every step). This happens because our test set is chosen independently from training set.
+
+We can see that if we take 2 * median standard error around the true risk (or we could say our estimated risk, since it is in average the same), the risk of baseline model is included in this interval (we simulate the 95CI with median SE), which means that with this CI we are not exactly giving a very exact intervals.
+Another thing we notice when we look at the confidence intervals is, that we construct a 95CI, but our true value is contained in it in only 0.934 of repetitions. This means that we underestimate the uncertainty of our estimate if we construct the CI like this.
+
+If our training set was bigger, the standard error would be smaller, because there would be less variability in the models. If it was smaller, the error would increase. Also, if we used bigger training set, the true risk (and then also its estimate) would be smaller, because the model would be better fitted (if we are using good learner) - oppositely to smaller training set.
+With bigger test set, we would decrease the difference between estimate and true risk, and decrease the standard error (CLT), oppositely to smaller test set. Mean difference would still be 0, since the holdout estimation is unbiased.
+
+#### Overestimation of the deployed model’s risk
+
+In practice we rarely deploy the model trained only on the training data. Similarly, we never deploy any of
+the k models that are learned during k-fold cross-validation. Instead, we use the estimation as a means to
+select the best learner and then deploy the model trained on more data, typically all the available data.
+More data typically means that the learner will produce a model with lower true risk.
+
+```{r, warning = FALSE, echo = FALSE}
+
+differences <- c()
+
+for (i in 1:50) {
+  toy1 <- toy_data(50, i^2-3000)
+  toy2 <- toy_data(50, i^2+3000)
+
+  h1 <- glm(y~., data = toy1, family= "binomial")
+  h2 <- glm(y~., data = rbind(toy1, toy2), family= "binomial")
+
+  y_pred1 <- predict(h1, newdata = df_dgp[,-9], type="response")
+  y_pred2 <- predict(h2, newdata = df_dgp[,-9], type="response")
+
+  loss1 <- log_loss(y_true, y_pred1)
+  loss2 <- log_loss(y_true, y_pred2)
+
+  differences <- c(differences, mean(loss1) - mean(loss2))
+}
+
+summary(differences)
+```
+If we translate the above into practical terms, we can see the summary of differences of risks of the model that we trained on training data (half), and the one that we trained on all the available data. As we said above, the model trained on more data, should typically have lower risk, but we can see that this is not a rule, as the minimum of the differences is negative, which means that in that case, we overestimated the model's performance. But in general, we can see that our estimate of the risk is overestimated, and the model that we deploy, is actually better than we estimate by training it on some smaller set. We can see that from all the other values in the summary. We can also see that the mean of the differences is now not equal to zero, so our estimate is biased (positively).
+
+This difference become smaller if we take larger proportion of all available data for the training set, and even larger if we take less -- our estimate will be even more biased. If our whole dataset is bigger, the difference will be smaller, as both risks will be smaller, and bigger with smaller dataset (worse models). Also variance would fall with bigger dataset and rise with smaller.
+
+#### Loss estimator variability due to split variability
+
+In a practical application of train-test splitting, we would choose a train-test split proportion, train on the
+training data, and test on the test data. We would then use this result on the test data as an estimate of the
+true risk of the model trained on all data. From the experiments so far, we can gather that this estimate will
+be biased, because the tested model is trained on less data than the model we are interested in. It will also
+have variance due to which observations ended up in the training set and which in the test set. To that we
+can add the most basic source of variability -- the variability of the losses across observations.
+
+```{r, warning = FALSE, echo = FALSE}
+
+toy <- toy_data(100, 0)
+
+h0 <- glm(y~., data = toy, family= "binomial")
+loss0 <- log_loss(y_true, predict(h0, newdata = df_dgp[,-9], type="response"))
+trp <- mean(loss0)
+
+if (sd(loss0) > 1.5) {
+  cat('True risk could be estimated badly, since standard error is bigger then 1: ', sd(loss0))
+}
+
+ci_contains_true <- c()
+differences <- c()
+st_error <- c()
+
+set.seed(0)
+for (i in 1:1000) {
+  sample <- sample.int(n = 100, size = 50, replace = F)
+  train <- toy[sample, ]
+  test  <- toy[-sample, ]
+
+  h <- glm(y~., data = train, family = "binomial")
+
+  y_pred <- predict(h, newdata = test[,-9], type="response")
+  loss <- log_loss(test$y, y_pred)
+  tr_estimate <- mean(loss)
+  tr_std <- sd(loss) / sqrt(length(loss))
+
+  true_risk_h0_in_ci <- abs(trp - tr_estimate) < 2 * tr_std
+  ci_contains_true <- c(ci_contains_true, true_risk_h0_in_ci)
+
+  differences <- c(differences, tr_estimate - trp)
+  st_error <- c(st_error, tr_std)
+}
+
+cat('True risk proxy of h0:', trp)
+cat('Percentage of CI containing true risk proxy:', mean(ci_contains_true))
+cat('Mean difference:', mean(differences))
+cat('Median standard error:', median(st_error))
+
+```
+
+
+```{r, fig.width=4, fig.height=4, echo = FALSE}
+plot(density(differences), main='', xlab='est_risk - true_risk') + abline(v=0, lty=3)
+```
+
+The first thing that we can confirm with above results is the hypothesis already written above -- the true risk proxy of h0, that was trained on 100 observations is lower than the true risk of the model h trained on 50 observations.
+
+From mean difference (and the plot) we can confirm that our risk estimator is positively biased. On the plot we see that we have some extreme values that greatly overestimate the risk, which can lead to wrong selection of the model we think is best, only because of unfortunate train-test split. This shows us that it's necessary to include more different splits into model selection.
+
+The percentage of 95CI that contain the true risk is much smaller that should be, which means we are again underestimating the uncertainty of our estimation.
+
+If the dataset was larger, our estimates would be better. First we would have lower true risk, because of better trained model. The estimate would have lower bias, as it would be trained on more data, and also lower error of estimation, because it would be tested on more data. If our dataset was smaller, the opposite would happen.
+If the proportion of training data would be bigger, we would again have lower bias because of more similar size of the training set to the whole set, but the standard error would be bigger, because the test size would be smaller.
+If we lower the proportion of training data, the bias would be bigger, because of more difference in the training set size. But we're not sure if the variance would drop, because even though we would have more test data, there would be more variability in how the models are trained.
+
+## Cross-validation
+
+If we extrapolate the results so far to cross-validation, we can conclude that cross-validation estimates of true
+risk will also be biased and will contain a lot of variability if the dataset is relatively small. This variability
+will be both due to training set and due to test set variability on top of the inherent variability of the losses.
+
+```{r, warning = FALSE, echo = FALSE}
+cross_validation <- function(k, data) {
+  n <- nrow(data)
+  sample <- sample.int(n = n, size = n, replace = F)
+  all_losses <- rep(Inf, n)
+  for (i in 1:k) {
+    if (k==n) {
+      idx <- i
+    } else {
+      start <- (i-1)/k * n + 1
+      end <- i/k*n
+      idx <- sample[start:end]
+    }
+    test <- data[idx, ]
+    train  <- toy[-idx, ]
+    hcv <- glm(y~., data = train, family= "binomial")
+    loss <- log_loss(test$y, predict(hcv, newdata = test[,-9], type="response"))
+    all_losses[idx] <- loss
+  }
+  return (all_losses)
+}
+
+fold_2_difference <- c()
+fold_2_std <- c()
+fold_2_ci_contains_true <- c()
+
+fold_4_difference <- c()
+fold_4_std <- c()
+fold_4_ci_contains_true <- c()
+
+fold_10_difference <- c()
+fold_10_std <- c()
+fold_10_ci_contains_true <- c()
+
+fold_2010_difference <- c()
+fold_2010_std <- c()
+fold_2010_ci_contains_true <- c()
+
+loocv_difference <- c()
+loocv_std <- c()
+loocv_ci_contains_true <- c()
+
+for (i in 1:500) {
+  toy <- toy_data(100, i^2)
+
+  h0 <- glm(y~., data = toy, family= "binomial")
+  loss0 <- log_loss(y_true, predict(h0, newdata = df_dgp[,-9], type="response"))
+  trp <- mean(loss0)
+
+  if (sd(loss0) > 1.5) {
+    cat('True risk could be estimated badly, since standard error is bigger then 1: ', sd(loss0))
+  }
+
+  # 2-fold CV
+  losses <- cross_validation(2, toy)
+  est <- mean(losses)
+  std <- sd(losses) / sqrt(length(losses))
+  fold_2_difference <- c(fold_2_difference, est - trp)
+  fold_2_std <- c(fold_2_std, std)
+  fold_2_ci_contains_true <- c(fold_2_ci_contains_true, abs(est - trp) < 2*std)
+
+  # 4-fold CV
+  losses <- cross_validation(4, toy)
+  est <- mean(losses)
+  std <- sd(losses) / sqrt(length(losses))
+  fold_4_difference <- c(fold_4_difference, est - trp)
+  fold_4_std <- c(fold_4_std, std)
+  fold_4_ci_contains_true <- c(fold_4_ci_contains_true, abs(est - trp) < 2*std)
+
+  # 10-fold CV
+  losses <- cross_validation(10, toy)
+  est <- mean(losses)
+  std <- sd(losses) / sqrt(length(losses))
+  fold_10_difference <- c(fold_10_difference, est - trp)
+  fold_10_std <- c(fold_10_std, std)
+  fold_10_ci_contains_true <- c(fold_10_ci_contains_true, abs(est - trp) < 2*std)
+
+  # 20 times repeated 10-fold CV
+  losses <- rep(0, 10)
+  for (i in 1:20) {
+    losses <- losses + cross_validation(10, toy)
+  }
+  losses <- losses / 20
+  est <- mean(losses)
+  std <- sd(losses) / sqrt(length(losses))
+  fold_2010_difference <- c(fold_2010_difference, est - trp)
+  fold_2010_std <- c(fold_2010_std, std)
+  fold_2010_ci_contains_true <- c(fold_2010_ci_contains_true, abs(est - trp) < 2*std)
+
+  # LOOCV
+  losses <- cross_validation(100, toy)
+  est <- mean(losses)
+  std <- sd(losses) / sqrt(length(losses))
+  loocv_difference <- c(loocv_difference, est - trp)
+  loocv_std <- c(loocv_std, std)
+  loocv_ci_contains_true <- c(loocv_ci_contains_true, abs(est - trp) < 2*std)
+
+
+}
+
+```
+
+
+
+#### Plots from cross validation
+We are compared k-fold cross validation with different number of folds and with repetition. Below you can see the plots of differences between our estimation and true risk of the model and other statistics of different cross validations.  
+
+```{r, fig.width=8, fig.height=6, echo = FALSE}
+par(mfrow=c(2,3))
+plot(density(fold_2_difference), xlab='est_risk - true_risk', main='2-fold CV', xlim=c(-0.5, 3), ylim=c(-0.5, 5))
+plot(density(fold_4_difference), xlab='est_risk - true_risk', main='4-fold CV', xlim=c(-0.5, 3), ylim=c(-0.5, 5))
+plot(density(fold_10_difference), xlab='est_risk - true_risk', main='10-fold CV', xlim=c(-0.5, 3), ylim=c(-0.5, 5))
+plot(density(fold_2010_difference), xlab='est_risk - true_risk', main='Repeated 10-fold CV', xlim=c(-0.5, 3), ylim=c(-0.5, 5))
+plot(density(loocv_difference), xlab='est_risk - true_risk', main='LOOCV', xlim=c(-0.5, 3), ylim=c(-0.5, 5))
+```
+
+
+
+
+
+```{r, echo = FALSE}
+print('2-fold CV:')
+cat('Percentage of CI containing true risk proxy:', mean(fold_2_ci_contains_true))
+cat('Mean difference:', mean(fold_2_difference))
+cat('Median standard error:', median(fold_2_std))
+
+print('4-fold CV:')
+cat('Percentage of CI containing true risk proxy:', mean(fold_4_ci_contains_true))
+cat('Mean difference:', mean(fold_4_difference))
+cat('Median standard error:', median(fold_4_std))
+
+print('10-fold CV:')
+cat('Percentage of CI containing true risk proxy:', mean(fold_10_ci_contains_true))
+cat('Mean difference:', mean(fold_10_difference))
+cat('Median standard error:', median(fold_10_std))
+
+print('Repeated 10-fold CV:')
+cat('Percentage of CI containing true risk proxy:', mean(fold_2010_ci_contains_true))
+cat('Mean difference:', mean(fold_2010_difference))
+cat('Median standard error:', median(fold_2010_std))
+
+print('LOOCV:')
+cat('Percentage of CI containing true risk proxy:', mean(loocv_ci_contains_true))
+cat('Mean difference:', mean(loocv_difference))
+cat('Median standard error:', median(loocv_std))
+
+```
+
+We can see, that by bigger number of folds, we are lowering bias and standard error of our estimate. Bias can be explained the same way as before, it is lower, when we have more examples in our train dataset (with more folds). But here also standard error lowers, when we have more folds, and the reason for that is that we always have the same number of observations that we calculate the risk on (the whole dataset), the only difference is in the model that we use to predict each point. And with bigger k, those models are more similar and better trained, so the standard error is lower.
+
+From that we could conclude that LOOCV is the best, but here we don't take speed into account. This approach is much slower than others, because it needs to train as many models as we have points in our dataset.
+
+From CI we can see that still in all CV without repetitions, we are underestimating the error of our estimate, but this becomes better with bigger number of folds. We reach the best estimation of the error of our estimate with repeated cross validation (it looks like it is unbiased), which could be explained by us averaging the loss on each observation and thereby getting results less dependent on the fold partitions, so the error is better estimated.
+
+If we look at the tails on the plots (this can be seen even better if we don't limit the x-axis, but we did, for easier comparison of shape), we can also easily see that we are more likely to select a worst model with lower number of folds, as we can greatly overestimate the risk of our best model. With bigger folds the tails are smaller, which means that our model selection should be better, as we couldn't underestimate model's performance so much. Also with more folds we have sharper peaks, which means that the estimates are concentrated closer to the true value.
+
+#### A different scenario
+If our learner wouldn't be smart, or our DGP would generate dataset that wouldn't make it possible for learner to train a good model, or our original dataset would be too small for a good fit, the above results probably wouldn't hold.
+
+We tested this hypothesis for different DGP. Our new DGP is similar to the previous one, but here the target variable is dependant only on one of the input variables. This brings us to negative bias, which means that CV on such data underestimates the risk, and also our previous observations for CI and SE don't hold anymore. From this we can conclude, that the knowledge about model evaluation that we gathered holds for learners, DGPs and datasets that have nice properties. But as soon as one part of our model generation has some strange properties, that we don't detect, it can hurt our model evaluation and selection. So the important part is to analyze our datasets and know our learner's properties, so that we know when something goes wrong.
+
+```{r, warning = FALSE, echo = FALSE}
+
+different_data <- function(n, seed = NULL) {
+set.seed(seed)
+x <- matrix(rnorm(8 * n), ncol = 8)
+z <- x[,1]
+y <- runif(n) > 1 / (1 + exp(-z))
+return (data.frame(x = x, y = y))
+}
+
+df_different <- different_data(100000, 0)
+
+fold_2_difference <- c()
+fold_2_std <- c()
+fold_2_ci_contains_true <- c()
+
+fold_4_difference <- c()
+fold_4_std <- c()
+fold_4_ci_contains_true <- c()
+
+fold_10_difference <- c()
+fold_10_std <- c()
+fold_10_ci_contains_true <- c()
+
+fold_2010_difference <- c()
+fold_2010_std <- c()
+fold_2010_ci_contains_true <- c()
+
+loocv_difference <- c()
+loocv_std <- c()
+loocv_ci_contains_true <- c()
+
+for (i in 1:5) {
+  toy <- different_data(100, i^2)
+
+  h0 <- glm(y~., data = toy, family= "binomial")
+  loss0 <- log_loss(y_true, predict(h0, newdata = df_different[,-9], type="response"))
+  trp <- mean(loss0)
+
+  # 2-fold CV
+  losses <- cross_validation(2, toy)
+  est <- mean(losses)
+  std <- sd(losses) / sqrt(length(losses))
+  fold_2_difference <- c(fold_2_difference, est - trp)
+  fold_2_std <- c(fold_2_std, std)
+  fold_2_ci_contains_true <- c(fold_2_ci_contains_true, abs(est - trp) < 2*std)
+
+  # 4-fold CV
+  losses <- cross_validation(4, toy)
+  est <- mean(losses)
+  std <- sd(losses) / sqrt(length(losses))
+  fold_4_difference <- c(fold_4_difference, est - trp)
+  fold_4_std <- c(fold_4_std, std)
+  fold_4_ci_contains_true <- c(fold_4_ci_contains_true, abs(est - trp) < 2*std)
+
+  # 10-fold CV
+  losses <- cross_validation(10, toy)
+  est <- mean(losses)
+  std <- sd(losses) / sqrt(length(losses))
+  fold_10_difference <- c(fold_10_difference, est - trp)
+  fold_10_std <- c(fold_10_std, std)
+  fold_10_ci_contains_true <- c(fold_10_ci_contains_true, abs(est - trp) < 2*std)
+
+  # 20 times repeated 10-fold CV
+  losses <- rep(0, 100)
+  for (i in 1:20) {
+    losses <- losses + cross_validation(10, toy)
+  }
+  losses <- losses / 20
+  est <- mean(losses)
+  std <- sd(losses) / sqrt(length(losses))
+  fold_2010_difference <- c(fold_2010_difference, est - trp)
+  fold_2010_std <- c(fold_2010_std, std)
+  fold_2010_ci_contains_true <- c(fold_2010_ci_contains_true, abs(est - trp) < 2*std)
+
+  # LOOCV
+  losses <- cross_validation(10, toy)
+  est <- mean(losses)
+  std <- sd(losses) / sqrt(length(losses))
+  loocv_difference <- c(loocv_difference, est - trp)
+  loocv_std <- c(loocv_std, std)
+  loocv_ci_contains_true <- c(loocv_ci_contains_true, abs(est - trp) < 2*std)
+
+
+}
+
+print('2-fold CV:')
+cat('Percentage of CI containing true risk proxy:', mean(fold_2_ci_contains_true))
+cat('Mean difference:', mean(fold_2_difference))
+cat('Median standard error:', median(fold_2_std))
+
+print('4-fold CV:')
+cat('Percentage of CI containing true risk proxy:', mean(fold_4_ci_contains_true))
+cat('Mean difference:', mean(fold_4_difference))
+cat('Median standard error:', median(fold_4_std))
+
+print('10-fold CV:')
+cat('Percentage of CI containing true risk proxy:', mean(fold_10_ci_contains_true))
+cat('Mean difference:', mean(fold_10_difference))
+cat('Median standard error:', median(fold_10_std))
+
+print('Repeated 10-fold CV:')
+cat('Percentage of CI containing true risk proxy:', mean(fold_2010_ci_contains_true))
+cat('Mean difference:', mean(fold_2010_difference))
+cat('Median standard error:', median(fold_2010_std))
+
+print('LOOCV:')
+cat('Percentage of CI containing true risk proxy:', mean(loocv_ci_contains_true))
+cat('Mean difference:', mean(loocv_difference))
+cat('Median standard error:', median(loocv_std))
+
+```

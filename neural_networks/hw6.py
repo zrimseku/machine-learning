@@ -1,7 +1,14 @@
 import numpy as np
 import pandas as pd
 from scipy.optimize import fmin_l_bfgs_b
-from sklearn.model_selection import train_test_split
+
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.metrics import make_scorer
+from sklearn.preprocessing import StandardScaler
+
+from sklearn.base import BaseEstimator
+
+from 
 
 
 def cross_entropy_cost(net, X, y):
@@ -31,18 +38,26 @@ def mse_cost(net, X, y):
 
 def regularization(net):
     reg = 0
-    if net.reg_par != 0:
+    if net.lambda_ != 0:
         for w in net.weight:
             reg += np.linalg.norm(w) ** 2
-    return reg / 2 * net.reg_par
+    return reg / 2 * net.lambda_
 
 
-def cost(net, X, y):
+def cost_with_regularization(net, X, y):
     if net.act_last == 'linear':
         f = mse_cost(net, X, y)
     else:
         f = cross_entropy_cost(net, X, y)
     return f + regularization(net)
+
+
+def neg_cost(net, X, y):
+    if net.act_last == 'linear':
+        f = mse_cost(net, X, y)
+    else:
+        f = cross_entropy_cost(net, X, y)
+    return -f
 
 
 def sigmoid(z):
@@ -54,9 +69,9 @@ def forward(net, X):
     A = [X]
     for i in range(net.nr_layers - 2):
         z = net.weight[i] @ X + net.bias[i]
-        if net.activation == 'sigmoid':
+        if net.activation_fn == 'sigmoid':
             X = sigmoid(z)
-        elif net.activation == 'relu':
+        elif net.activation_fn == 'relu':
             X = np.maximum(z, 0)
         else:
             print('Unknown activation function. Use sigmoid or relu.')
@@ -93,18 +108,18 @@ def backpropagation(net, X, y):
     else:
         dz[y, range(len(y))] += -1
     db[-1] = np.reshape(np.sum(dz, axis=1), (net.layer_sizes[-1], 1)) / len(y)
-    dW[-1] = dz @ A[-2].T / len(y) + net.reg_par * net.weight[-1]
+    dW[-1] = dz @ A[-2].T / len(y) + net.lambda_ * net.weight[-1]
 
     for i in range(2, net.nr_layers):
-        if net.activation == 'sigmoid':
+        if net.activation_fn == 'sigmoid':
             act_derivative = A[-i] * (1 - A[-i])
-        elif net.activation == 'relu':
+        elif net.activation_fn == 'relu':
             act_derivative = Z[-i] > 0
         else:
             print('Unknown activation function. Use sigmoid or relu.')
             exit(-1)
         dz = act_derivative * (net.weight[1 - i].T @ dz)
-        dW[-i] = dz @ A[-i-1].T / len(y) + net.reg_par * net.weight[-i]
+        dW[-i] = dz @ A[-i-1].T / len(y) + net.lambda_ * net.weight[-i]
         db[-i] = np.reshape(np.sum(dz, axis=1), (dz.shape[0], 1)) / len(y)
     return dW, db
 
@@ -120,23 +135,27 @@ def update_network(net, weight_bias_vec):
     return net.weight, net.bias
 
 
-class ANNClassification:
+class ANNClassification(BaseEstimator):
 
-    def __init__(self, units, n_input=None, n_classes=None, lambda_=0., activation_fn='sigmoid', act_last='sigmoid'):
+    def __init__(self, units=None, n_classes=None, lambda_=0., activation_fn='relu', act_last='softmax'):
         # number of input parameters and classes are set to 1, if we dont know the values at initialization
-        self.nr_layers = len(units) + 2
-        self.layer_sizes = [n_input, *units, n_classes]
+        if units is None:
+            units = []
+        self.units = units
+        self.n_classes = n_classes
+        self.nr_layers = len(self.units) + 2
+        self.layer_sizes = [0, *self.units, self.n_classes]
         self.bias = None
         self.weight = None
-        self.reg_par = lambda_
-        self.activation = activation_fn
+        self.lambda_ = lambda_
+        self.activation_fn = activation_fn
         self.act_last = act_last
 
     def cost_for_optimization(self, weight_bias_vec, X, y):
         # change weights and bias of current net to new ones
         self.weight, self.bias = update_network(self, weight_bias_vec)
         # return cost
-        return cross_entropy_cost(self, X, y)
+        return cross_entropy_cost(self, X, y) + regularization(self)
 
     def backprop_for_optimization(self, weight_bias_vec, X, y):
         # change weights and bias of current net to new ones
@@ -148,22 +167,34 @@ class ANNClassification:
         # suppose we get data as rows -> transfer them into columns for standard form of mtx calculations
         X = X.T
 
-        # set correct numbers of neurons in first and last layer
-        self.layer_sizes[0] = X.shape[0]
+        # correct layer parameters (needed for GridSearchCV, because it copies the initial model)
+        self.nr_layers = len(self.units) + 2
+        self.layer_sizes = [X.shape[0], *self.units, self.n_classes]
+        # set correct numbers of neurons in last layer
         if self.layer_sizes[-1] is None:
             self.layer_sizes[-1] = max(y) + 1
+            self.n_classes = max(y) + 1
 
+        print(self.layer_sizes)
+        print(self.units)
+        print(self.n_classes)
         # initializing bias and weights
+        np.random.seed(0)
         self.bias = [np.random.randn(y, 1) for y in self.layer_sizes[1:]]
         self.weight = [np.random.randn(y, x) / np.sqrt(x) for x, y in zip(self.layer_sizes[:-1], self.layer_sizes[1:])]
 
         # optimization using fmin_l_bfgs_b
         initial_vec = np.hstack([np.hstack([w.flatten(), b.flatten()]) for w, b in zip(self.weight, self.bias)])
+        # print('-------------------------------------')
+        # print(self.weight[0][0, 0])
 
         new_vec, cost_min, info = fmin_l_bfgs_b(func=self.cost_for_optimization, x0=initial_vec,
                                                 fprime=self.backprop_for_optimization, args=[X, y])
+        # print(self.weight[0][0, 0])
 
-        self.weight, self.bias = update_network(self, new_vec)
+        self.weight, bias = update_network(self, new_vec)
+
+        # print("after", self.weight[0][0, 0])
 
         return self
 
@@ -176,22 +207,25 @@ class ANNClassification:
         return [np.hstack([w, b]) for w, b in zip(self.weight, self.bias)]
 
 
-class ANNRegression:
+class ANNRegression(BaseEstimator):
 
-    def __init__(self, units, lambda_=0., n_input=None, activation_fn='sigmoid'):
+    def __init__(self, units=None, lambda_=0., activation_fn='relu'):
+        if units is None:
+            units = []
+        self.units = units
         self.nr_layers = len(units) + 2
-        self.layer_sizes = [n_input, *units, 1]
+        self.layer_sizes = [0, *units, 1]
         self.bias = None
         self.weight = None
-        self.reg_par = lambda_
-        self.activation = activation_fn
+        self.lambda_ = lambda_
+        self.activation_fn = activation_fn
         self.act_last = 'linear'
 
     def cost_for_optimization(self, weight_bias_vec, X, y):
         # change weights and bias of current net to new ones
         self.weight, self.bias = update_network(self, weight_bias_vec)
         # return cost
-        return mse_cost(self, X, y)
+        return mse_cost(self, X, y) + regularization(self)
 
     def backprop_for_optimization(self, weight_bias_vec, X, y):
         # self.weight, self.bias = update_network(self, weight_bias_vec)
@@ -202,10 +236,12 @@ class ANNRegression:
         # suppose we get data as rows -> transfer them into columns for standard form of mtx calculations
         X = X.T
 
-        # set correct numbers of neurons in first layer
-        self.layer_sizes[0] = X.shape[0]
+        # correct layer parameters (needed for GridSearchCV, because it copies the initial model)
+        self.nr_layers = len(self.units) + 2
+        self.layer_sizes = [X.shape[0], *self.units, 1]
 
         # initializing bias and weights
+        np.random.seed(0)
         self.bias = [np.random.randn(y, 1) for y in self.layer_sizes[1:]]
         self.weight = [np.random.randn(y, x) / np.sqrt(x) for x, y in zip(self.layer_sizes[:-1], self.layer_sizes[1:])]
 
@@ -231,7 +267,7 @@ class ANNRegression:
 def check_gradient(net, x, y, h=1e-6, tol=1e-4):
     dW, db = backpropagation(net, x, y)
 
-    f = cost(net, x, y)
+    f = cost_with_regularization(net, x, y)
 
     all_grad_same = True
 
@@ -240,7 +276,7 @@ def check_gradient(net, x, y, h=1e-6, tol=1e-4):
         for i in range(I):
             for j in range(J):
                 net.weight[l][i, j] += h
-                num_dw = (cost(net, x, y) - f) / h
+                num_dw = (cost_with_regularization(net, x, y) - f) / h
                 grad_same = abs(num_dw - dW[l][i, j]) < tol
                 if not grad_same:
                     print(f'Gradients are not the same on layer {l+1}, weight {i, j}')
@@ -249,7 +285,7 @@ def check_gradient(net, x, y, h=1e-6, tol=1e-4):
                     all_grad_same = False
                 net.weight[l][i, j] -= h
             net.bias[l][i] += h
-            num_db = (cost(net, x, y) - f) / h
+            num_db = (cost_with_regularization(net, x, y) - f) / h
             grad_same = abs(db[l][i] - num_db) < tol
             if not grad_same:
                 print(f'Gradients are not the same on layer {l+1}, bias {i}')
@@ -261,12 +297,12 @@ def check_gradient(net, x, y, h=1e-6, tol=1e-4):
         print('Congratulations Urša, all partial derivatives are finally the same!!')
 
 
-if __name__ == '__main__':
+def prepare_housing_data():
     housing3 = pd.read_csv('housing3.csv')
     housing2r = pd.read_csv('housing2r.csv')
 
     # change classes into integers
-    housing3['Class'] = housing3['Class'].map({c: int(c[1]) for c in housing3['Class'].unique()})
+    housing3['Class'] = housing3['Class'].map({c: int(c[1]) - 1 for c in housing3['Class'].unique()})
 
     # generate train/test, input/target sets
     Xh3 = housing3.loc[:, housing3.columns != 'Class'].values
@@ -277,18 +313,56 @@ if __name__ == '__main__':
     yh2 = housing2r['y'].values
     X2_train, X2_test, y2_train, y2_test = train_test_split(Xh2, yh2, test_size=0.2, random_state=2)
 
-    # create and fit networks
-    net_reg = ANNRegression([10, 30, 10], lambda_=0.001, activation_fn='relu')
+    # standardization
+    scaler_reg = StandardScaler()
+    X2_train = scaler_reg.fit_transform(X2_train)
+    X2_test = scaler_reg.transform(X2_test)
+
+    scaler_class = StandardScaler()
+    X3_train = scaler_class.fit_transform(X3_train)
+    X3_test = scaler_class.transform(X3_test)
+    return X3_train, y3_train, X2_train, y2_train, X3_test, y3_test, X2_test, y2_test
+
+
+def parameter_selection_housing(Xc, yc, Xr, yr, act_fn='relu', act_last='softmax'):
+    parameter_grid = {'lambda_': [0, 0.01, 0.1, 0.5, 1], 'units': [[], [10], [10, 10], [20, 20], [10, 10, 10]]}
+    # parameter_grid = {'lambda_': [0, 0.1, 1], 'units': [[20, 20], [10, 10, 10]]}
+
+    gs_class = GridSearchCV(estimator=ANNClassification(activation_fn=act_fn, act_last=act_last),
+                            param_grid=parameter_grid, scoring=neg_cost)
+    gs_reg = GridSearchCV(estimator=ANNRegression(activation_fn=act_fn), param_grid=parameter_grid, scoring=neg_cost)
+
+    results_class = gs_class.fit(Xc, yc)
+    results_reg = gs_reg.fit(Xr, yr)
+
+    return results_class, results_reg
+
+
+if __name__ == '__main__':
+    # HOUSING DATA
+    X3_train, y3_train, X2_train, y2_train, X3_test, y3_test, X2_test, y2_test = prepare_housing_data()
+
+    # parameter selection with grid search cross validation
+    results_class, results_reg = parameter_selection_housing(X3_train, y3_train, X2_train, y2_train)
+
+    best_units_c = results_class.best_params_['units']
+    best_lambda_c = results_class.best_params_['lambda_']
+    best_units_r = results_reg.best_params_['units']
+    best_lambda_r = results_reg.best_params_['lambda_']
+
+    # create and fit networks with best parameters defined above
+    net_reg = ANNRegression(units=best_units_r, lambda_=best_lambda_r, activation_fn='relu')
     net_reg.fit(X2_train, y2_train)
 
-    net_class = ANNClassification([10, 30, 10], lambda_=0.01, activation_fn='relu', act_last='softmax')
+    net_class = ANNClassification(units=best_units_c, lambda_=best_lambda_c, activation_fn='relu', act_last='softmax')
     net_class.fit(X3_train, y3_train)
 
     # cost on test data
     mse = mse_cost(net_reg, X2_test, y2_test)
-    print('MSE: ', mse)
+    print(f'Best MSE reached on network with units {best_units_r} and lambda {best_lambda_r}: ', mse)
 
     ce = cross_entropy_cost(net_class, X3_test, y3_test)
-    print('Cross entropy: ', ce)
-    c = 0
+    print(f'Best cross entropy reached on network with units {best_units_c} and lambda {best_lambda_c}: ', ce)
+
+
 
