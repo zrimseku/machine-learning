@@ -8,7 +8,8 @@ from sklearn.preprocessing import StandardScaler
 
 from sklearn.base import BaseEstimator
 
-from 
+from logistic_regression.regression import MultinomialLogReg
+from support_vector_machines.hw_svr import SVR, RBF
 
 
 def cross_entropy_cost(net, X, y):
@@ -175,9 +176,9 @@ class ANNClassification(BaseEstimator):
             self.layer_sizes[-1] = max(y) + 1
             self.n_classes = max(y) + 1
 
-        print(self.layer_sizes)
-        print(self.units)
-        print(self.n_classes)
+        # print(self.layer_sizes)
+        # print(self.units)
+        # print(self.n_classes)
         # initializing bias and weights
         np.random.seed(0)
         self.bias = [np.random.randn(y, 1) for y in self.layer_sizes[1:]]
@@ -298,8 +299,8 @@ def check_gradient(net, x, y, h=1e-6, tol=1e-4):
 
 
 def prepare_housing_data():
-    housing3 = pd.read_csv('housing3.csv')
-    housing2r = pd.read_csv('housing2r.csv')
+    housing3 = pd.read_csv('../data/housing3.csv')
+    housing2r = pd.read_csv('../data/housing2r.csv')
 
     # change classes into integers
     housing3['Class'] = housing3['Class'].map({c: int(c[1]) - 1 for c in housing3['Class'].unique()})
@@ -335,20 +336,20 @@ def parameter_selection_housing(Xc, yc, Xr, yr, act_fn='relu', act_last='softmax
     results_class = gs_class.fit(Xc, yc)
     results_reg = gs_reg.fit(Xr, yr)
 
-    return results_class, results_reg
-
-
-if __name__ == '__main__':
-    # HOUSING DATA
-    X3_train, y3_train, X2_train, y2_train, X3_test, y3_test, X2_test, y2_test = prepare_housing_data()
-
-    # parameter selection with grid search cross validation
-    results_class, results_reg = parameter_selection_housing(X3_train, y3_train, X2_train, y2_train)
-
     best_units_c = results_class.best_params_['units']
     best_lambda_c = results_class.best_params_['lambda_']
     best_units_r = results_reg.best_params_['units']
     best_lambda_r = results_reg.best_params_['lambda_']
+
+    return best_units_c, best_lambda_c, best_units_r, best_lambda_r
+
+
+def compare_approaches_housing():
+    X3_train, y3_train, X2_train, y2_train, X3_test, y3_test, X2_test, y2_test = prepare_housing_data()
+
+    # parameter selection with grid search cross validation
+    best_units_c, best_lambda_c, best_units_r, best_lambda_r = parameter_selection_housing(X3_train, y3_train, X2_train,
+                                                                                           y2_train)
 
     # create and fit networks with best parameters defined above
     net_reg = ANNRegression(units=best_units_r, lambda_=best_lambda_r, activation_fn='relu')
@@ -358,11 +359,30 @@ if __name__ == '__main__':
     net_class.fit(X3_train, y3_train)
 
     # cost on test data
-    mse = mse_cost(net_reg, X2_test, y2_test)
+    mse = mse_cost(net_reg, X2_test, y2_test) * 2  # we are optimizing half of MSE, to avoid *2 in gradients
     print(f'Best MSE reached on network with units {best_units_r} and lambda {best_lambda_r}: ', mse)
 
     ce = cross_entropy_cost(net_class, X3_test, y3_test)
     print(f'Best cross entropy reached on network with units {best_units_c} and lambda {best_lambda_c}: ', ce)
 
+    # compare with Logistic Regression for classification, Support Vector Machines for regression
+    svr = SVR(kernel=RBF(sigma=3.4), lambda_=0.1, epsilon=8)
+    svr = svr.fit(X2_train, y2_train)
+    svr_prediction = svr.predict(X2_test)
+    svr_mse = sum((svr_prediction - y2_test) ** 2) / len(y2_test)
+    print(f'MSE reached with Support Vector Regression: ', svr_mse)
+
+    lr = MultinomialLogReg()
+    lr = lr.build(X3_train, y3_train)
+    lr_prediction = lr.predict(X3_test, return_prob=True)
+    lr_cross_entr = - sum(np.log(lr_prediction[range(len(y3_test)), y3_test])) / len(y3_test)
+    print(f'Cross entropy reached with Logistic Regression: ', lr_cross_entr)
 
 
+if __name__ == '__main__':
+    # HOUSING DATA
+    # compare_approaches_housing()
+
+    # BIG DATASET
+    big = pd.read_csv('../data/train.csv')
+    
