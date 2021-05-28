@@ -164,7 +164,6 @@ class ANNClassification(BaseEstimator):
 
     def backprop_for_optimization(self, weight_bias_vec, X, y):
         # change weights and bias of current net to new ones
-        # self.weight, self.bias = update_network(self, weight_bias_vec)
         dW, db = backpropagation(self, X, y)
         return np.hstack([np.hstack([w.flatten(), b.flatten()]) for w, b in zip(dW, db)])
 
@@ -180,9 +179,6 @@ class ANNClassification(BaseEstimator):
             self.layer_sizes[-1] = max(y) + 1
             self.n_classes = max(y) + 1
 
-        # print(self.layer_sizes)
-        # print(self.units)
-        # print(self.n_classes)
         # initializing bias and weights
         np.random.seed(0)
         self.bias = [np.random.randn(y, 1) for y in self.layer_sizes[1:]]
@@ -190,16 +186,11 @@ class ANNClassification(BaseEstimator):
 
         # optimization using fmin_l_bfgs_b
         initial_vec = np.hstack([np.hstack([w.flatten(), b.flatten()]) for w, b in zip(self.weight, self.bias)])
-        # print('-------------------------------------')
-        # print(self.weight[0][0, 0])
 
         new_vec, cost_min, info = fmin_l_bfgs_b(func=self.cost_for_optimization, x0=initial_vec,
                                                 fprime=self.backprop_for_optimization, args=[X, y])
-        # print(self.weight[0][0, 0])
 
         self.weight, bias = update_network(self, new_vec)
-
-        # print("after", self.weight[0][0, 0])
 
         return self
 
@@ -331,7 +322,6 @@ def prepare_housing_data():
 
 def parameter_selection_housing(Xc, yc, Xr, yr, act_fn='relu', act_last='softmax'):
     parameter_grid = {'lambda_': [0, 0.01, 0.1, 0.5, 1], 'units': [[], [10], [10, 10], [20, 20], [10, 10, 10]]}
-    # parameter_grid = {'lambda_': [0, 0.1, 1], 'units': [[20, 20], [10, 10, 10]]}
 
     gs_class = GridSearchCV(estimator=ANNClassification(activation_fn=act_fn, act_last=act_last),
                             param_grid=parameter_grid, scoring=neg_cost)
@@ -396,8 +386,6 @@ def big_dataset_par_selection(X, y):
     print('Consequential parameters: ', results_class.cv_results_['params'])
     print('Time needed to fit: ', results_class.cv_results_['mean_fit_time'])
     print('Time needed to score: ', results_class.cv_results_['mean_score_time'])
-    print('Mean test score on all folds: ', results_class.cv_results_['mean_test_score'])
-    print('Std of test scores on all folds: ', results_class.cv_results_['std_test_score'])
 
 
 def big_dataset_evaluation(X, y, units, lambda_):
@@ -440,12 +428,12 @@ def create_final_predictions():
     final_predictions = model.predict(X_test)
     print('Predicting time: ', time.time() - t)
 
-    final_results = pd.DataFrame(columns=['id', 'Class_1', 'Class_2', 'Class_3', 'Class_4', 'Class_5', 'Class_6',
-                                          'Class_7', 'Class_8', 'Class_9'])
+    final_results = pd.DataFrame(final_predictions)
 
-    final_results['id'] = range(1, X_test.shape[0] + 1)
-    final_results.loc[:, ['Class_1', 'Class_2', 'Class_3', 'Class_4', 'Class_5', 'Class_6', 'Class_7', 'Class_8',
-                          'Class_9']] = final_predictions
+    final_results.index = range(1, X_test.shape[0] + 1)
+    final_results.index.name = 'id'
+    final_results.columns = ['Class_1', 'Class_2', 'Class_3', 'Class_4', 'Class_5', 'Class_6', 'Class_7', 'Class_8',
+                             'Class_9']
 
     final_results.to_csv('final.txt')
 
@@ -469,15 +457,7 @@ if __name__ == '__main__':
     X = scaler.fit_transform(X)
     X_test = scaler.transform(X_test)
 
-    # big_dataset_par_selection(X, y)
-    # best: 0.01, [10, 10]
+    big_dataset_par_selection(X, y)
 
-    # print(big_dataset_evaluation(X, y, [20, 20], 0.01))
-
-
-# Consequential parameters:  [{'lambda_': 0.01, 'units': []}, {'lambda_': 0.01, 'units': [10]}, {'lambda_': 0.01, 'units': [50]}, {'lambda_': 0.01, 'units': [10, 10]}, {'lambda_': 0.01, 'units': [20, 50]}, {'lambda_': 0.01, 'units': [10, 10, 10]}, {'lambda_': 0.05, 'units': []}, {'lambda_': 0.05, 'units': [10]}, {'lambda_': 0.05, 'units': [50]}, {'lambda_': 0.05, 'units': [10, 10]}, {'lambda_': 0.05, 'units': [20, 50]}, {'lambda_': 0.05, 'units': [10, 10, 10]}, {'lambda_': 0.1, 'units': []}, {'lambda_': 0.1, 'units': [10]}, {'lambda_': 0.1, 'units': [50]}, {'lambda_': 0.1, 'units': [10, 10]}, {'lambda_': 0.1, 'units': [20, 50]}, {'lambda_': 0.1, 'units': [10, 10, 10]}, {'lambda_': 0.5, 'units': []}, {'lambda_': 0.5, 'units': [10]}, {'lambda_': 0.5, 'units': [50]}, {'lambda_': 0.5, 'units': [10, 10]}, {'lambda_': 0.5, 'units': [20, 50]}, {'lambda_': 0.5, 'units': [10, 10, 10]}, {'lambda_': 1, 'units': []}, {'lambda_': 1, 'units': [10]}, {'lambda_': 1, 'units': [50]}, {'lambda_': 1, 'units': [10, 10]}, {'lambda_': 1, 'units': [20, 50]}, {'lambda_': 1, 'units': [10, 10, 10]}]
-
-# 10, 10, 10, 0.01
-# (0.6549887183454217, 0.8832770734826829)
-# [20, 20], 0.01))
-# (0.6316246101114356, 0.8322549440140061)
+    print('Mean and standard deviation of CE on the big dataset: ', big_dataset_evaluation(X, y, [10, 10], 0.01))
+    create_final_predictions()
