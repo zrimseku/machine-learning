@@ -1,9 +1,10 @@
+import time
+
 import numpy as np
 import pandas as pd
 from scipy.optimize import fmin_l_bfgs_b
 
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import make_scorer
+from sklearn.model_selection import train_test_split, GridSearchCV, KFold
 from sklearn.preprocessing import StandardScaler
 
 from sklearn.base import BaseEstimator
@@ -12,12 +13,15 @@ from logistic_regression.regression import MultinomialLogReg
 from support_vector_machines.hw_svr import SVR, RBF
 
 
-def cross_entropy_cost(net, X, y):
+def cross_entropy_cost(net, X, y, return_points=False):
     if X.shape[0] != net.weight[0].shape[1]:
         X = X.T
     _, A = forward(net, X)
     Y = A[-1]
     ce = sum(np.log(Y[y, range(len(y))]))
+    if return_points:
+        # option for cross validation
+        return - np.log(Y[y, range(len(y))]).flatten()
     if net.act_last == 'sigmoid':
         for i in range(len(y)):
             Y = A[-1][:, i]
@@ -344,7 +348,7 @@ def parameter_selection_housing(Xc, yc, Xr, yr, act_fn='relu', act_last='softmax
     return best_units_c, best_lambda_c, best_units_r, best_lambda_r
 
 
-def compare_approaches_housing():
+def compare_approaches_housing(activation_fn, act_last):
     X3_train, y3_train, X2_train, y2_train, X3_test, y3_test, X2_test, y2_test = prepare_housing_data()
 
     # parameter selection with grid search cross validation
@@ -352,10 +356,11 @@ def compare_approaches_housing():
                                                                                            y2_train)
 
     # create and fit networks with best parameters defined above
-    net_reg = ANNRegression(units=best_units_r, lambda_=best_lambda_r, activation_fn='relu')
+    net_reg = ANNRegression(units=best_units_r, lambda_=best_lambda_r, activation_fn=activation_fn)
     net_reg.fit(X2_train, y2_train)
 
-    net_class = ANNClassification(units=best_units_c, lambda_=best_lambda_c, activation_fn='relu', act_last='softmax')
+    net_class = ANNClassification(units=best_units_c, lambda_=best_lambda_c, activation_fn=activation_fn,
+                                  act_last=act_last)
     net_class.fit(X3_train, y3_train)
 
     # cost on test data
@@ -379,9 +384,75 @@ def compare_approaches_housing():
     print(f'Cross entropy reached with Logistic Regression: ', lr_cross_entr)
 
 
+def big_dataset_par_selection(X, y):
+    parameter_grid = {'lambda_': [0.01, 0.05, 0.1, 0.5, 1], 'units': [[], [10], [50], [10, 10], [20, 50], [10, 10, 10]]}
+    # parameter_grid = {'lambda_': [0.1, 1], 'units': [[10, 10], [10]]}
+
+    gs = GridSearchCV(estimator=ANNClassification(activation_fn='relu', act_last='softmax', n_classes=9),
+                      param_grid=parameter_grid, scoring=neg_cost)
+
+    results_class = gs.fit(X, y)
+    print('Best parameters: ', results_class.best_params_)
+    print('Consequential parameters: ', results_class.cv_results_['params'])
+    print('Time needed to fit: ', results_class.cv_results_['mean_fit_time'])
+    print('Time needed to score: ', results_class.cv_results_['mean_score_time'])
+    print('Mean test score on all folds: ', results_class.cv_results_['mean_test_score'])
+    print('Std of test scores on all folds: ', results_class.cv_results_['std_test_score'])
+
+
+def big_dataset_evaluation(X, y, units, lambda_):
+    results = np.zeros(X.shape[0])
+
+    folds = KFold(n_splits=5, shuffle=True, random_state=0)
+
+    for train_idx, test_idx in folds.split(X):
+        model = ANNClassification(units=units, lambda_=lambda_, activation_fn='relu', act_last='softmax', n_classes=9)
+        model = model.fit(X[train_idx, :], y[train_idx])
+        loss = cross_entropy_cost(model, X[test_idx, :], y[test_idx], return_points=True)
+        results[test_idx] = loss
+
+    return np.mean(results), np.std(results)
+
+
+def create_final_predictions():
+    units = [10, 10]
+    lambda_ = 0.01
+
+    big = pd.read_csv('../data/train.csv')
+    big = big.drop('id', axis=1)
+    big['target'] = big['target'].map({c: int(c[-1]) - 1 for c in big['target'].unique()})
+    X = big.loc[:, big.columns != 'target'].values
+    y = big['target'].values
+
+    new = pd.read_csv('../data/test.csv')
+    X_test = new.drop('id', axis=1).values
+
+    # scale data
+    scaler = StandardScaler()
+    X = scaler.fit_transform(X)
+    X_test = scaler.transform(X_test)
+
+    model = ANNClassification(units=units, lambda_=lambda_, activation_fn='relu', act_last='softmax', n_classes=9)
+    t = time.time()
+    model = model.fit(X, y)
+    print('Fitting time: ', time.time() - t)
+    t = time.time()
+    final_predictions = model.predict(X_test)
+    print('Predicting time: ', time.time() - t)
+
+    final_results = pd.DataFrame(columns=['id', 'Class_1', 'Class_2', 'Class_3', 'Class_4', 'Class_5', 'Class_6',
+                                          'Class_7', 'Class_8', 'Class_9'])
+
+    final_results['id'] = range(1, X_test.shape[0] + 1)
+    final_results.loc[:, ['Class_1', 'Class_2', 'Class_3', 'Class_4', 'Class_5', 'Class_6', 'Class_7', 'Class_8',
+                          'Class_9']] = final_predictions
+
+    final_results.to_csv('final.txt')
+
+
 if __name__ == '__main__':
     # HOUSING DATA
-    # compare_approaches_housing()
+    compare_approaches_housing('sigmoid', 'softmax')
 
     # BIG DATASET
     big = pd.read_csv('../data/train.csv')
@@ -398,16 +469,15 @@ if __name__ == '__main__':
     X = scaler.fit_transform(X)
     X_test = scaler.transform(X_test)
 
-    # parameter_grid = {'lambda_': [0, 0.01, 0.1, 0.5, 1], 'units': [[], [10], [10, 10], [20, 20], [10, 10, 10]]}
-    parameter_grid = {'lambda_': [0.1, 1], 'units': [[10, 10], [10]]}
+    # big_dataset_par_selection(X, y)
+    # best: 0.01, [10, 10]
 
-    gs = GridSearchCV(estimator=ANNClassification(activation_fn='relu', act_last='softmax', n_classes=9), param_grid=parameter_grid,
-                      scoring=neg_cost)
+    # print(big_dataset_evaluation(X, y, [20, 20], 0.01))
 
-    results_class = gs.fit(X, y)
-    print('Best parameters: ', results_class.best_params_)
-    print('Consequential parameters: ', results_class.cv_results_['params'])
-    print('Time needed to fit: ', results_class.cv_results_['mean_fit_time'])
-    print('Time needed to score: ', results_class.cv_results_['mean_score_time'])
-    print('Mean test score on all folds: ', results_class.cv_results_['mean_test_score'])
-    print('Std of test scores on all folds: ', results_class.cv_results_['std_test_score'])
+
+# Consequential parameters:  [{'lambda_': 0.01, 'units': []}, {'lambda_': 0.01, 'units': [10]}, {'lambda_': 0.01, 'units': [50]}, {'lambda_': 0.01, 'units': [10, 10]}, {'lambda_': 0.01, 'units': [20, 50]}, {'lambda_': 0.01, 'units': [10, 10, 10]}, {'lambda_': 0.05, 'units': []}, {'lambda_': 0.05, 'units': [10]}, {'lambda_': 0.05, 'units': [50]}, {'lambda_': 0.05, 'units': [10, 10]}, {'lambda_': 0.05, 'units': [20, 50]}, {'lambda_': 0.05, 'units': [10, 10, 10]}, {'lambda_': 0.1, 'units': []}, {'lambda_': 0.1, 'units': [10]}, {'lambda_': 0.1, 'units': [50]}, {'lambda_': 0.1, 'units': [10, 10]}, {'lambda_': 0.1, 'units': [20, 50]}, {'lambda_': 0.1, 'units': [10, 10, 10]}, {'lambda_': 0.5, 'units': []}, {'lambda_': 0.5, 'units': [10]}, {'lambda_': 0.5, 'units': [50]}, {'lambda_': 0.5, 'units': [10, 10]}, {'lambda_': 0.5, 'units': [20, 50]}, {'lambda_': 0.5, 'units': [10, 10, 10]}, {'lambda_': 1, 'units': []}, {'lambda_': 1, 'units': [10]}, {'lambda_': 1, 'units': [50]}, {'lambda_': 1, 'units': [10, 10]}, {'lambda_': 1, 'units': [20, 50]}, {'lambda_': 1, 'units': [10, 10, 10]}]
+
+# 10, 10, 10, 0.01
+# (0.6549887183454217, 0.8832770734826829)
+# [20, 20], 0.01))
+# (0.6316246101114356, 0.8322549440140061)
